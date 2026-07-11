@@ -12,6 +12,26 @@
 #include <string>
 #include <vector>
 
+/*
+ * Platformer movement-graph pathfinding demo
+ * ------------------------------------------
+ * The level is represented by a small set of platforms plus a ladder and a
+ * tunnel.  BuildBaseLevel creates graph nodes at platform edges and at the
+ * special traversal entrances, then creates directed walk, jump, drop, climb,
+ * and dig edges.  An edge describes a possible movement, while EnemyProfile
+ * decides whether a particular enemy can actually use it.
+ *
+ * Whenever the user moves the goal, the goal is attached to the nearest
+ * platform and A* is run once for each enemy type.  The selected enemy follows
+ * its valid graph path while the renderer displays usable links, rejected
+ * links and their rejection reasons, and the final highlighted route.  A
+ * deliberately naive four-neighbour grid search is shown beside the graph to
+ * demonstrate why collision-free grid movement alone is not a sufficient
+ * movement model for a platform game.
+ *
+ * Coordinates in the graph are level-local.  ToScreen and FromScreen are the
+ * boundary between those coordinates and Win32 client coordinates.
+ */
 namespace
 {
 constexpr int kEnemyCount = 3;
@@ -61,6 +81,7 @@ enum class EnemyKind
     Wolf = 2
 };
 
+// Static collision surface and the graph nodes placed at its two ends.
 struct Platform
 {
     std::string name;
@@ -69,6 +90,7 @@ struct Platform
     int rightNode = -1;
 };
 
+// A movement-graph waypoint.  platform is -1 only for nodes off a surface.
 struct Node
 {
     int id = -1;
@@ -79,6 +101,7 @@ struct Node
     std::string label;
 };
 
+// Directed traversal candidate plus cached geometry used by ability checks.
 struct Edge
 {
     int from = -1;
@@ -90,6 +113,7 @@ struct Edge
     float down = 0.0f;
 };
 
+// Movement abilities and limits that turn the shared graph into an enemy-specific graph.
 struct EnemyProfile
 {
     EnemyKind kind;
@@ -107,6 +131,7 @@ struct EnemyProfile
     float speed = 110.0f;
 };
 
+// A* output.  edges and nodes are stored in start-to-goal traversal order.
 struct PathResult
 {
     bool found = false;
@@ -116,6 +141,7 @@ struct PathResult
     std::vector<int> edges;
 };
 
+// Result of the comparison search; unsupportedRatio measures travel through open air.
 struct GridPath
 {
     bool found = false;
@@ -131,6 +157,7 @@ struct Button
     std::string label;
 };
 
+// Complete model and UI state for the single-window demo.
 struct AppState
 {
     std::vector<Platform> platforms;
@@ -174,6 +201,8 @@ int EnemyIndex(EnemyKind kind)
 
 const std::array<EnemyProfile, kEnemyCount>& Profiles()
 {
+    // The mole uses the tunnel, the goblin uses the ladder and modest jumps,
+    // and the wolf trades special traversal for the strongest jump and drop.
     static const std::array<EnemyProfile, kEnemyCount> profiles {
         EnemyProfile {
             EnemyKind::Mole,
@@ -327,6 +356,8 @@ void AddEdge(std::vector<Edge>& edges, const std::vector<Node>& nodes, int from,
 
 void AddWalkEdges(std::vector<Edge>& edges, const std::vector<Node>& nodes)
 {
+    // Every waypoint on one platform is mutually reachable by walking.  This
+    // also connects edge nodes to ladder, tunnel, and goal nodes on that surface.
     for (size_t i = 0; i < nodes.size(); ++i)
     {
         for (size_t j = i + 1; j < nodes.size(); ++j)
@@ -342,6 +373,8 @@ void AddWalkEdges(std::vector<Edge>& edges, const std::vector<Node>& nodes)
 
 bool EdgeIsUsable(const Edge& edge, const EnemyProfile& profile, std::string* reason)
 {
+    // Graph construction records geometrically plausible candidates.  This
+    // second-stage filter applies the selected enemy's abilities and limits.
     switch (edge.kind)
     {
     case EdgeKind::Walk:
@@ -424,6 +457,7 @@ bool EdgeIsUsable(const Edge& edge, const EnemyProfile& profile, std::string* re
 
 PathResult FindPath(int start, int goal, const EnemyProfile& profile, const std::vector<Node>& nodes, const std::vector<Edge>& edges)
 {
+    // A* runs over only those directed edges that the supplied profile can use.
     struct Item
     {
         int node = -1;
@@ -443,6 +477,7 @@ PathResult FindPath(int start, int goal, const EnemyProfile& profile, const std:
     std::vector<char> closed(n, 0);
     std::vector<std::vector<int>> adjacency(n);
 
+    // Build an enemy-specific adjacency list without modifying the shared graph.
     for (int i = 0; i < static_cast<int>(edges.size()); ++i)
     {
         std::string unused;
@@ -452,6 +487,8 @@ PathResult FindPath(int start, int goal, const EnemyProfile& profile, const std:
         }
     }
 
+    // Straight-line distance is an admissible lower bound because every edge
+    // cost is at least its geometric length.
     auto heuristic = [&](int a) {
         return Distance(nodes[a].p, nodes[goal].p);
     };
@@ -497,6 +534,8 @@ PathResult FindPath(int start, int goal, const EnemyProfile& profile, const std:
         return result;
     }
 
+    // Follow predecessor links backwards, then reverse both sequences so the
+    // animation can consume them from start to goal.
     result.cost = g[goal];
     for (int at = goal; at != -1; at = cameNode[at])
     {
@@ -543,6 +582,8 @@ bool PointIsSupported(Vec2 p)
 
 GridPath BuildNaiveGridPath()
 {
+    // This comparison intentionally models only blocked/free cells.  It has no
+    // gravity, support, jump arc, ladder, tunnel, or enemy-ability semantics.
     struct Item
     {
         int index = -1;
@@ -681,6 +722,8 @@ GridPath BuildNaiveGridPath()
     }
     std::reverse(result.points.begin(), result.points.end());
 
+    // Quantify the conceptual failure by checking how much of the path is not
+    // supported by a platform, ladder, or tunnel.
     int unsupported = 0;
     for (Vec2 p : result.points)
     {
@@ -695,6 +738,8 @@ GridPath BuildNaiveGridPath()
 
 void AddDirectedPlatformLink(int platformA, int platformB)
 {
+    // Link the pair of facing platform edges.  Screen y increases downwards,
+    // so a positive `up` value means that the destination is visually higher.
     const Platform& a = g_app.platforms[platformA];
     const Platform& b = g_app.platforms[platformB];
     const float centerA = a.rect.x + a.rect.w * 0.5f;
@@ -708,6 +753,8 @@ void AddDirectedPlatformLink(int platformA, int platformB)
     const float up = std::max(0.0f, p0.y - p1.y);
     const float down = std::max(0.0f, p1.y - p0.y);
 
+    // Discard candidates outside the demo's broad geometric envelope.  Exact
+    // per-enemy limits are applied later by EdgeIsUsable.
     if (dx > 285.0f || up > 175.0f || down > 240.0f)
     {
         return;
@@ -719,6 +766,8 @@ void AddDirectedPlatformLink(int platformA, int platformB)
 
 void BuildBaseLevel()
 {
+    // Construct immutable level geometry first.  The movable goal is added to
+    // a copy of this base graph by RebuildScenarioGraph.
     g_app.platforms.clear();
     g_app.baseNodes.clear();
     g_app.baseEdges.clear();
@@ -746,12 +795,16 @@ void BuildBaseLevel()
     AddNode(g_app.baseNodes, 0, NodeRole::Tunnel, 0, Vec2 { 340.0f, 525.0f }, "Tunnel left", &tunnelLeft);
     AddNode(g_app.baseNodes, 1, NodeRole::Tunnel, 0, Vec2 { 515.0f, 525.0f }, "Tunnel right", &tunnelRight);
 
+    // Walking connects all nodes that share a platform; ladder and tunnel
+    // connections are explicitly bidirectional special-movement edges.
     AddWalkEdges(g_app.baseEdges, g_app.baseNodes);
     AddEdge(g_app.baseEdges, g_app.baseNodes, ladderBottom, ladderTop, EdgeKind::Climb);
     AddEdge(g_app.baseEdges, g_app.baseNodes, ladderTop, ladderBottom, EdgeKind::Climb);
     AddEdge(g_app.baseEdges, g_app.baseNodes, tunnelLeft, tunnelRight, EdgeKind::Dig);
     AddEdge(g_app.baseEdges, g_app.baseNodes, tunnelRight, tunnelLeft, EdgeKind::Dig);
 
+    // Test every ordered platform pair because jump/drop reachability and edge
+    // type depend on the direction of travel.
     for (int a = 0; a < static_cast<int>(g_app.platforms.size()); ++a)
     {
         for (int b = 0; b < static_cast<int>(g_app.platforms.size()); ++b)
@@ -776,6 +829,8 @@ void ResetAgent()
 
 void RecomputePaths()
 {
+    // Keep reachability results for all three profiles so the status row can
+    // update immediately even when only one enemy is currently animated.
     for (const EnemyProfile& profile : Profiles())
     {
         g_app.reach[EnemyIndex(profile.kind)] = FindPath(g_app.startNode, g_app.goalNode, profile, g_app.nodes, g_app.edges);
@@ -786,12 +841,16 @@ void RecomputePaths()
 
 void RebuildScenarioGraph()
 {
+    // Recreate the transient graph from the fixed level before inserting the
+    // current goal.  This prevents old goal nodes and links from accumulating.
     g_app.nodes = g_app.baseNodes;
     g_app.edges = g_app.baseEdges;
 
     g_app.goalNode = static_cast<int>(g_app.nodes.size());
     g_app.nodes.push_back(Node { g_app.goalNode, g_app.goalPoint, g_app.goalPlatform, NodeRole::Goal, 0, "Goal" });
 
+    // A goal on a platform behaves like another waypoint on that surface and
+    // therefore receives walk links in both directions.
     for (int i = 0; i < g_app.goalNode; ++i)
     {
         if (g_app.nodes[i].platform == g_app.goalPlatform)
@@ -806,6 +865,8 @@ void RebuildScenarioGraph()
 
 void SetGoalFromClick(Vec2 click)
 {
+    // Snap an arbitrary click to the nearest walkable platform top.  The inset
+    // keeps the marker away from the extreme platform corners.
     float best = std::numeric_limits<float>::infinity();
     int bestPlatform = 0;
     Vec2 bestPoint;
@@ -833,6 +894,8 @@ void SetGoalFromClick(Vec2 click)
 
 std::vector<POINT> EdgePolyline(const Edge& edge, const std::vector<Node>& nodes)
 {
+    // Produce the same visual movement shapes used by the agent: a quadratic
+    // arc for jumps, a bowed underground curve for digging, and lines otherwise.
     const Vec2 a = nodes[edge.from].p;
     const Vec2 b = nodes[edge.to].p;
     std::vector<POINT> points;
@@ -875,6 +938,8 @@ std::vector<POINT> EdgePolyline(const Edge& edge, const std::vector<Node>& nodes
 
 Vec2 PointOnEdge(const Edge& edge, float t)
 {
+    // Evaluate an edge at normalized progress t for animation.  These formulas
+    // mirror EdgePolyline so the agent remains centered on the displayed link.
     const Vec2 a = g_app.nodes[edge.from].p;
     const Vec2 b = g_app.nodes[edge.to].p;
     t = Clamp(t, 0.0f, 1.0f);
@@ -906,6 +971,8 @@ Vec2 PointOnEdge(const Edge& edge, float t)
 
 void AdvanceAgent(float dt)
 {
+    // Spend this frame's travel budget across as many path edges as necessary;
+    // this keeps motion speed independent of timer frequency and edge length.
     const PathResult& path = g_app.reach[EnemyIndex(g_app.selectedEnemy)];
     if (!path.found || path.nodes.size() < 2)
     {
@@ -1037,6 +1104,7 @@ void DrawCircle(HDC hdc, POINT center, int radius, COLORREF fill, COLORREF outli
 
 void DrawLevelGeometry(HDC hdc)
 {
+    // Draw physical level features before graph diagnostics and the agent.
     RECT levelRect = MakeRect(kLevelLeft, kLevelTop, kLevelLeft + static_cast<int>(kLevelW), kLevelTop + static_cast<int>(kLevelH));
     FillRectColor(hdc, levelRect, RGB(242, 244, 247));
     StrokeRectColor(hdc, levelRect, RGB(190, 198, 208));
@@ -1089,6 +1157,8 @@ void DrawLevelGeometry(HDC hdc)
 
 void DrawGraph(HDC hdc)
 {
+    // Invalid special links are drawn first so usable links and the selected
+    // A* route remain visually dominant.  Walk links need no rejection label.
     const EnemyProfile& profile = CurrentProfile();
 
     if (g_app.showInvalidEdges)
@@ -1233,6 +1303,8 @@ void DrawButtons(HDC hdc)
 
 void DrawComparisonPanel(HDC hdc)
 {
+    // Render a scaled copy of the level with the naive grid path and metrics
+    // beside the movement-aware graph view.
     RECT panel = MakeRect(kPanelLeft, kPanelTop, kPanelLeft + 330, kPanelTop + 580);
     FillRectColor(hdc, panel, RGB(242, 244, 247));
     StrokeRectColor(hdc, panel, RGB(190, 198, 208));
@@ -1334,6 +1406,7 @@ void Render(HDC hdc, const RECT& client)
 
 void OnPaint(HWND hwnd)
 {
+    // Double buffering avoids flicker while the timer continuously animates the agent.
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hwnd, &ps);
     RECT client;
@@ -1369,6 +1442,7 @@ void SelectEnemy(EnemyKind kind)
 
 void OnLeftButtonDown(HWND hwnd, int x, int y)
 {
+    // Hit-test controls first; clicks in the level become a new snapped goal.
     int buttonX = 24;
     for (const EnemyProfile& profile : Profiles())
     {
@@ -1399,6 +1473,8 @@ void OnLeftButtonDown(HWND hwnd, int x, int y)
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    // Minimal Win32 message dispatch: timer drives simulation, paint draws the
+    // current state, and mouse input changes enemy/diagnostics/goal state.
     switch (message)
     {
     case WM_CREATE:
@@ -1426,6 +1502,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
 void InitializeApp()
 {
+    // Build the fixed graph, choose the initial top-ledge goal, and calculate
+    // the first set of enemy-specific and naive-grid paths.
     BuildBaseLevel();
     g_app.goalPlatform = 4;
     g_app.goalPoint = Vec2 { 382.0f, 225.0f };
@@ -1435,6 +1513,7 @@ void InitializeApp()
 
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand)
 {
+    // Standard Win32 setup and message loop; all demo state lives in g_app.
     InitializeApp();
 
     WNDCLASSEXA wc {};
