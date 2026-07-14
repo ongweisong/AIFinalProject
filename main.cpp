@@ -790,10 +790,13 @@ void BuildBaseLevel()
     int ladderTop = -1;
     int tunnelLeft = -1;
     int tunnelRight = -1;
+    int rightShelfLanding = -1;
     AddNode(g_app.baseNodes, 0, NodeRole::Ladder, 0, Vec2 { 205.0f, 525.0f }, "Ladder bottom", &ladderBottom);
     AddNode(g_app.baseNodes, 2, NodeRole::Ladder, 0, Vec2 { 205.0f, 395.0f }, "Ladder top", &ladderTop);
     AddNode(g_app.baseNodes, 0, NodeRole::Tunnel, 0, Vec2 { 340.0f, 525.0f }, "Tunnel left", &tunnelLeft);
     AddNode(g_app.baseNodes, 1, NodeRole::Tunnel, 0, Vec2 { 515.0f, 525.0f }, "Tunnel right", &tunnelRight);
+    // Align a safe landing waypoint with the left edge of the shelf above.
+    AddNode(g_app.baseNodes, 1, NodeRole::Edge, 0, Vec2 { 610.0f, 525.0f }, "Right shelf landing", &rightShelfLanding);
 
     // Walking connects all nodes that share a platform; ladder and tunnel
     // connections are explicitly bidirectional special-movement edges.
@@ -802,6 +805,11 @@ void BuildBaseLevel()
     AddEdge(g_app.baseEdges, g_app.baseNodes, ladderTop, ladderBottom, EdgeKind::Climb);
     AddEdge(g_app.baseEdges, g_app.baseNodes, tunnelLeft, tunnelRight, EdgeKind::Dig);
     AddEdge(g_app.baseEdges, g_app.baseNodes, tunnelRight, tunnelLeft, EdgeKind::Dig);
+    AddEdge(g_app.baseEdges, g_app.baseNodes, g_app.platforms[5].leftNode, rightShelfLanding, EdgeKind::Drop);
+
+    // These overlapping platforms have aligned right edges.  Add the direct
+    // upward jump that the center-based facing-edge heuristic does not select.
+    AddEdge(g_app.baseEdges, g_app.baseNodes, g_app.platforms[0].rightNode, g_app.platforms[2].rightNode, EdgeKind::Jump);
 
     // Test every ordered platform pair because jump/drop reachability and edge
     // type depend on the direction of travel.
